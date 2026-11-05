@@ -1,7 +1,10 @@
 -- Queue core for ACS Mobile Batch Operations.
 -- Game-specific actor orders and spell dispatch belong in an adapter and must
 -- call the original game logic. No game API is assumed here.
-local tbMod = GameMain:NewMod("ACS1MobileBatchOperations")
+local tbMod = GameMain:GetMod("ACS1MobileBatchOperations")
+if tbMod == nil then
+    tbMod = GameMain:NewMod("ACS1MobileBatchOperations")
+end
 
 local Queue = {}
 Queue.__index = Queue
@@ -77,8 +80,6 @@ function Queue:Count()
     return #self.tasks
 end
 
--- executor(action, actorId, targetId, repeats) must return true only when the
--- game's original action has accepted responsibility for this target.
 function Queue:Step(executor)
     if self.paused or self.running or #self.tasks == 0 then
         return false
@@ -132,12 +133,6 @@ tbMod.BatchQueue = Queue
 
 function tbMod:OnInit()
     self.batchQueue = Queue.New()
-end
-
-function tbMod:OnStep()
-    if self.batchQueue and type(self.BatchActionAdapter) == "function" then
-        self.batchQueue:Step(self.BatchActionAdapter)
-    end
 end
 
 function tbMod:OnGetSaveData()
