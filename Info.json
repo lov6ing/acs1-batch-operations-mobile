@@ -1,0 +1,10 @@
+{
+  "Name": "ACS1MobileBatchOperations",
+  "DisplayName": "批量操作（移动版原型）",
+  "GameVersion": 1.2,
+  "Version": 0.1,
+  "Desc": "移动版批量炼宝、幽淬与灵淬原型。尚未完成手游实机验证。",
+  "Author": "lov6ing",
+  "UIPackage": null,
+  "Dependencies": null
+}
