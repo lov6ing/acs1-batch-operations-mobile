@@ -9,6 +9,7 @@ local BUTTON_CRAFT = "批量炼宝"
 local BUTTON_YOU = "批量幽淬"
 local BUTTON_LING = "批量灵淬"
 local BUTTON_SUBMIT = "提交批量任务"
+local BUTTON_CANCEL_CRAFT = "取消剩余炼宝"
 
 local ACTIONS = {
     craft = { desc = "选择法宝胚子后逐件加入原版炼宝命令。" },
@@ -26,10 +27,12 @@ local function removeButtons(thing)
     thing:RemoveBtnData(BUTTON_YOU)
     thing:RemoveBtnData(BUTTON_LING)
     thing:RemoveBtnData(BUTTON_SUBMIT)
+    thing:RemoveBtnData(BUTTON_CANCEL_CRAFT)
 end
 
 function tbMod:AddBatchButtons(npc)
     if npc == nil or not npc.IsValid or not npc.IsPlayerThing then return end
+    if self.pendingCraft == nil then self.pendingCraft = {} end
 
     removeButtons(npc)
     if self.selection ~= nil and self.selection.actorId == npc.ID then
@@ -43,6 +46,11 @@ function tbMod:AddBatchButtons(npc)
             buttonLua("StartYouSelection"), "选择多个物品，逐个施展原版幽淬之法。", nil)
         npc:AddBtnData(BUTTON_LING, "res/Sprs/ui/icon_lingcui01",
             buttonLua("StartLingSelection"), "选择多个物品，逐个施展原版灵淬之法。", nil)
+        local pending = self.pendingCraft[npc.ID]
+        if pending ~= nil and #pending > 0 then
+            npc:AddBtnData(BUTTON_CANCEL_CRAFT, "res/Sprs/ui/icon_lianbao01",
+                buttonLua("CancelCraft"), "取消尚未开始的批量炼宝任务。", nil)
+        end
     end
 end
 
@@ -85,28 +93,45 @@ end
 function tbMod:SubmitTargets(npc)
     local selection = self.selection
     if selection == nil or npc == nil or npc.ID ~= selection.actorId then return end
-
     self.selection = nil
+
+    if selection.action == "craft" then
+        if self.pendingCraft == nil then self.pendingCraft = {} end
+        local pending = self.pendingCraft[npc.ID] or {}
+        for i = 1, #selection.targets do
+            pending[#pending + 1] = selection.targets[i]
+        end
+        self.pendingCraft[npc.ID] = pending
+        self:AddBatchButtons(npc)
+        world:ShowStoryBox(string.format("已排入 %d 个炼宝目标。角色会按顺序使用原版炼宝命令。", #selection.targets),
+            "批量操作", {"知道了"})
+        return
+    end
+
     local accepted, skipped = 0, 0
     for i = 1, #selection.targets do
         local item = CS.XiaWorld.ThingMgr.Instance:FindThingByID(selection.targets[i])
-        local ok = false
-        if selection.action == "craft" then
-            ok = self:QueueCraftCommand(npc, item)
+        if self:QueueRefinementCommand(npc, item, selection.action) then
+            accepted = accepted + 1
         else
-            ok = self:QueueRefinementCommand(npc, item, selection.action)
+            skipped = skipped + 1
         end
-        if ok then accepted = accepted + 1 else skipped = skipped + 1 end
     end
 
     self:AddBatchButtons(npc)
-    world:ShowStoryBox(string.format("已加入 %d 个原版命令；跳过 %d 个无效或资源不足的目标。",
+    world:ShowStoryBox(string.format("已加入 %d 个原版神通命令；跳过 %d 个无效或缺少灵珀/幽珀的目标。",
         accepted, skipped), "批量操作", {"知道了"})
 end
 
 function tbMod:QueueCraftCommand(npc, item)
     if item == nil or not item.IsValid or item.FreeCount <= 0 or
         not item.AtG or item.InWhoseBag > 0 or item.InWhoseHand > 0 then
+        return false
+    end
+    if npc:CheckCommandSingle("RefiningFabao", false) ~= nil then
+        return false
+    end
+    if npc.LingV < item.Rate * item.Rate * 500 then
         return false
     end
 
@@ -121,9 +146,17 @@ function tbMod:QueueRefinementCommand(npc, item, action)
     if actionDef == nil or item == nil or not item.IsValid or item.FreeCount <= 0 then
         return false
     end
+    if not npc.PropertyMgr.Practice.Magics:Contains(actionDef.magic) then
+        return false
+    end
 
     local magicDef = CS.XiaWorld.PracticeMgr.Instance:GetMagicDef(actionDef.magic)
-    if magicDef == nil then return false end
+    if magicDef == nil or magicDef.CMD == nil then return false end
+
+    -- The vanilla command is normally single-instance. Allow one command per
+    -- selected target; each command still runs through the game's own handler.
+    local commandDef = CS.XiaWorld.CommandMgr.Instance:GetDef(magicDef.CMD)
+    if commandDef ~= nil then commandDef.Single = 0 end
 
     local map = CS.XiaWorld.World.Instance.map
     local crystal = map.Things:FindItem(nil, 9999, actionDef.crystal, 0,
@@ -139,8 +172,37 @@ function tbMod:QueueRefinementCommand(npc, item, action)
     return true
 end
 
+function tbMod:CancelCraft(npc)
+    if npc == nil or self.pendingCraft == nil then return end
+    self.pendingCraft[npc.ID] = nil
+    self:AddBatchButtons(npc)
+end
+
+function tbMod:OnStep(dt)
+    if self.pendingCraft == nil then return end
+    for npcId, targets in pairs(self.pendingCraft) do
+        local npc = CS.XiaWorld.ThingMgr.Instance:FindThingByID(npcId)
+        if npc == nil or not npc.IsValid then
+            self.pendingCraft[npcId] = nil
+        elseif #targets == 0 then
+            self.pendingCraft[npcId] = nil
+        elseif npc:CheckCommandSingle("RefiningFabao", false) == nil then
+            local item = CS.XiaWorld.ThingMgr.Instance:FindThingByID(targets[1])
+            if item == nil or not item.IsValid or item.FreeCount <= 0 or
+                not item.AtG or item.InWhoseBag > 0 or item.InWhoseHand > 0 then
+                table.remove(targets, 1)
+            elseif npc.LingV >= item.Rate * item.Rate * 500 then
+                if self:QueueCraftCommand(npc, item) then
+                    table.remove(targets, 1)
+                end
+            end
+        end
+    end
+end
+
 function tbMod:OnEnter()
     self.selection = nil
+    if self.pendingCraft == nil then self.pendingCraft = {} end
     local Event = GameMain:GetMod("_Event")
     local g_emEvent = CS.XiaWorld.g_emEvent
     Event:RegisterEvent(g_emEvent.SelectNpc, function(evt, npc, objs)
@@ -157,4 +219,13 @@ function tbMod:OnLeave()
     Event:UnRegisterEvent(g_emEvent.SelectNpc, "ACS1MobileBatchOperations_AddButtons")
     Event:UnRegisterEvent(g_emEvent.SelectItem, "ACS1MobileBatchOperations_CollectTargets")
     self.selection = nil
+end
+
+function tbMod:OnSave()
+    return { pendingCraft = self.pendingCraft or {} }
+end
+
+function tbMod:OnLoad(data)
+    data = data or {}
+    self.pendingCraft = data.pendingCraft or {}
 end
