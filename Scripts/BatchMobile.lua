@@ -1,9 +1,9 @@
 -- Touch-friendly batch command flow.
--- The UI is a three-step interaction: choose a cultivator action, tap target
--- items, then return to the cultivator and submit the queue.
+-- Choose an action, tap target items, then return to the cultivator and submit.
 local tbMod = GameMain:GetMod("ACS1MobileBatchOperations")
-local Event = GameMain:GetMod("_Event")
-local g_emEvent = CS.XiaWorld.g_emEvent
+if tbMod == nil then
+    tbMod = GameMain:NewMod("ACS1MobileBatchOperations")
+end
 
 local BUTTON_CRAFT = "批量炼宝"
 local BUTTON_YOU = "批量幽淬"
@@ -11,9 +11,9 @@ local BUTTON_LING = "批量灵淬"
 local BUTTON_SUBMIT = "提交批量任务"
 
 local ACTIONS = {
-    craft = { button = BUTTON_CRAFT, desc = "选择法宝胚子后逐件加入原版炼宝命令。" },
-    you = { button = BUTTON_YOU, magic = "SoulCrystalYouPowerUp", crystal = "Item_SoulCrystalYou" },
-    ling = { button = BUTTON_LING, magic = "SoulCrystalLingPowerUp", crystal = "Item_SoulCrystalLing" }
+    craft = { desc = "选择法宝胚子后逐件加入原版炼宝命令。" },
+    you = { magic = "SoulCrystalYouPowerUp", crystal = "Item_SoulCrystalYou" },
+    ling = { magic = "SoulCrystalLingPowerUp", crystal = "Item_SoulCrystalLing" }
 }
 
 local function buttonLua(method)
@@ -33,10 +33,9 @@ function tbMod:AddBatchButtons(npc)
 
     removeButtons(npc)
     if self.selection ~= nil and self.selection.actorId == npc.ID then
-        local mode = ACTIONS[self.selection.action]
-        npc:AddBtnData(BUTTON_SUBMIT .. "（" .. tostring(#self.selection.targets) .. "）",
-            "res/Sprs/ui/icon_lingxi01", buttonLua("SubmitTargets"),
-            "结束选取并提交已经选中的目标。", nil)
+        npc:AddBtnData(BUTTON_SUBMIT, "res/Sprs/ui/icon_lingxi01",
+            buttonLua("SubmitTargets"),
+            "结束选取并提交已经选中的目标（" .. tostring(#self.selection.targets) .. "）。", nil)
     else
         npc:AddBtnData(BUTTON_CRAFT, "res/Sprs/ui/icon_lianbao01",
             buttonLua("StartCraftSelection"), ACTIONS.craft.desc, nil)
@@ -87,7 +86,6 @@ function tbMod:SubmitTargets(npc)
     local selection = self.selection
     if selection == nil or npc == nil or npc.ID ~= selection.actorId then return end
 
-    -- Clear selection before dispatch so callbacks cannot append to this batch.
     self.selection = nil
     local accepted, skipped = 0, 0
     for i = 1, #selection.targets do
@@ -143,6 +141,8 @@ end
 
 function tbMod:OnEnter()
     self.selection = nil
+    local Event = GameMain:GetMod("_Event")
+    local g_emEvent = CS.XiaWorld.g_emEvent
     Event:RegisterEvent(g_emEvent.SelectNpc, function(evt, npc, objs)
         self:OnNpcSelected(evt, npc, objs)
     end, "ACS1MobileBatchOperations_AddButtons")
@@ -152,6 +152,8 @@ function tbMod:OnEnter()
 end
 
 function tbMod:OnLeave()
+    local Event = GameMain:GetMod("_Event")
+    local g_emEvent = CS.XiaWorld.g_emEvent
     Event:UnRegisterEvent(g_emEvent.SelectNpc, "ACS1MobileBatchOperations_AddButtons")
     Event:UnRegisterEvent(g_emEvent.SelectItem, "ACS1MobileBatchOperations_CollectTargets")
     self.selection = nil
